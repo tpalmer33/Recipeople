@@ -254,7 +254,7 @@ import { useFavoritesStore } from '@/stores/favorites'
 import StarRating from '@/components/recipe/StarRating.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import LoadingSpinner from '@/components/ui/LoadingSpinner.vue'
-import { recipeImages } from '@/lib/recipeImages'
+import { getRecipeImageUrl } from '@/lib/recipeImages'
 
 const route    = useRoute()
 const recipes  = useRecipesStore()
@@ -265,7 +265,7 @@ const recipe     = computed(() => recipes.currentRecipe)
 const isFav      = computed(() => recipe.value ? favStore.isFavorite(recipe.value.recipe_id) : false)
 const userRating = computed(() => recipe.value ? recipes.getUserRating(recipe.value.recipe_id) : null)
 const imageError = ref(false)
-const imageUrl   = computed(() => recipe.value ? (recipeImages[recipe.value.recipe_id] ?? null) : null)
+const imageUrl   = computed(() => recipe.value ? getRecipeImageUrl(recipe.value.recipe_id) : null)
 
 const completedSteps  = ref(new Set())
 const showRatingModal = ref(false)

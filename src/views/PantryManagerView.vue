@@ -8,10 +8,57 @@
     <!-- Search / Add -->
     <div class="mb-6">
       <label class="block text-sm font-semibold text-gray-700 mb-2">Add an ingredient</label>
-      <IngredientSearch
-        placeholder="Search for an ingredient to add…"
-        @select="onAddIngredient"
-      />
+      <div class="flex gap-2 items-start">
+        <div class="relative flex-1">
+          <input
+            v-model.trim="newIngredient.name"
+            type="text"
+            class="input-field text-sm"
+            placeholder="Search for an ingredient to add…"
+            autocomplete="off"
+            @input="onNewIngredientInput"
+            @focus="onNewIngredientFocus"
+            @blur="onNewIngredientBlur"
+          />
+          <div
+            v-if="newIngredient.loading"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-gray-400"
+          >
+            Searching…
+          </div>
+          <div
+            v-if="newIngredient.showSuggestions && newIngredient.suggestions.length > 0"
+            class="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-lg"
+          >
+            <button
+              v-for="item in newIngredient.suggestions"
+              :key="item.ingredient_id"
+              type="button"
+              @mousedown.prevent="selectNewIngredientSuggestion(item)"
+              class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-brand-50"
+              :disabled="pantry.isPantryItem(item.ingredient_id)"
+            >
+              <div>
+                <p class="text-sm font-medium text-gray-800">{{ item.name }}</p>
+                <p v-if="item.category" class="text-xs text-gray-400">{{ item.category }}</p>
+              </div>
+              <span v-if="pantry.isPantryItem(item.ingredient_id)" class="text-xs text-green-500 font-medium">In pantry</span>
+              <span v-else class="text-xs font-semibold text-brand-500">Add +</span>
+            </button>
+          </div>
+          <p class="mt-1 min-h-[16px] text-xs" :class="newIngredient.matchTone">
+            {{ newIngredient.matchLabel }}
+          </p>
+        </div>
+        <button
+          type="button"
+          @click="onAddNewIngredient"
+          :disabled="newIngredient.name.length < 2 || newIngredient.loading || pantry.loading"
+          class="btn-primary text-sm mt-0.5 whitespace-nowrap"
+        >
+          {{ newIngredient.ingredient_id ? 'Add' : 'Create & Add' }}
+        </button>
+      </div>
     </div>
 
     <!-- Loading skeleton -->
@@ -93,13 +140,25 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { usePantryStore } from '@/stores/pantry'
-import IngredientSearch from '@/components/pantry/IngredientSearch.vue'
+import { useRecipesStore } from '@/stores/recipes'
 
 const pantry = usePantryStore()
+const recipes = useRecipesStore()
 const errorMsg   = ref('')
 const successMsg = ref('')
+
+const newIngredient = reactive({
+  name: '',
+  ingredient_id: null,
+  suggestions: [],
+  showSuggestions: false,
+  loading: false,
+  matchLabel: '',
+  matchTone: 'text-gray-400',
+  searchToken: 0
+})
 
 const groupedPantry = computed(() => {
   const groups = {}
@@ -117,10 +176,104 @@ const groupedPantry = computed(() => {
   )
 })
 
-async function onAddIngredient(ingredient) {
+async function onNewIngredientInput() {
+  newIngredient.ingredient_id = null
+  newIngredient.matchLabel = ''
+  newIngredient.matchTone = 'text-gray-400'
+
+  const query = newIngredient.name.trim()
+  newIngredient.searchToken += 1
+  const token = newIngredient.searchToken
+
+  if (query.length < 2) {
+    newIngredient.suggestions = []
+    newIngredient.showSuggestions = false
+    newIngredient.loading = false
+    return
+  }
+
+  newIngredient.loading = true
   try {
-    await pantry.addIngredient(ingredient.ingredient_id)
-    showSuccess(`${ingredient.name} added to pantry`)
+    const suggestions = await recipes.searchIngredientSuggestions(query)
+    if (token !== newIngredient.searchToken) return
+
+    newIngredient.suggestions = suggestions
+    newIngredient.showSuggestions = true
+
+    const exact = suggestions.find(item => item.name.toLowerCase() === query.toLowerCase())
+    if (exact) {
+      newIngredient.ingredient_id = exact.ingredient_id
+      newIngredient.matchLabel = 'Matched from the ingredient list'
+      newIngredient.matchTone = 'text-emerald-600'
+    }
+  } catch {
+    if (token !== newIngredient.searchToken) return
+    newIngredient.suggestions = []
+  } finally {
+    if (token === newIngredient.searchToken) newIngredient.loading = false
+  }
+}
+
+function onNewIngredientFocus() {
+  if (newIngredient.suggestions.length > 0) newIngredient.showSuggestions = true
+}
+
+function onNewIngredientBlur() {
+  window.setTimeout(async () => {
+    newIngredient.showSuggestions = false
+
+    const query = newIngredient.name.trim()
+    if (!query || newIngredient.ingredient_id) return
+
+    try {
+      const { ingredient: match, inferred } = await recipes.resolveIngredientMatch(query)
+      if (!match) {
+        newIngredient.matchLabel = `"${query}" will be added as a new ingredient`
+        newIngredient.matchTone = 'text-blue-500'
+        return
+      }
+
+      newIngredient.ingredient_id = match.ingredient_id
+      newIngredient.name = match.name
+      newIngredient.matchLabel = inferred
+        ? `Using "${match.name}" from the ingredient list`
+        : 'Matched from the ingredient list'
+      newIngredient.matchTone = inferred ? 'text-amber-600' : 'text-emerald-600'
+    } catch {
+      newIngredient.matchLabel = ''
+    }
+  }, 120)
+}
+
+function selectNewIngredientSuggestion(item) {
+  if (pantry.isPantryItem(item.ingredient_id)) return
+  newIngredient.ingredient_id = item.ingredient_id
+  newIngredient.name = item.name
+  newIngredient.suggestions = []
+  newIngredient.showSuggestions = false
+  newIngredient.matchLabel = 'Matched from the ingredient list'
+  newIngredient.matchTone = 'text-emerald-600'
+  onAddNewIngredient()
+}
+
+async function onAddNewIngredient() {
+  const name = newIngredient.name.trim()
+  if (!name || name.length < 2) return
+
+  try {
+    let ingredientId = newIngredient.ingredient_id
+    if (!ingredientId) {
+      const created = await recipes.ensureIngredient(name)
+      ingredientId = created.ingredient_id
+    }
+    await pantry.addIngredient(ingredientId)
+    newIngredient.name = ''
+    newIngredient.ingredient_id = null
+    newIngredient.suggestions = []
+    newIngredient.showSuggestions = false
+    newIngredient.matchLabel = ''
+    newIngredient.matchTone = 'text-gray-400'
+    showSuccess(`${name} added to pantry`)
   } catch (err) {
     showError(err.message)
   }

@@ -3,6 +3,84 @@ import { ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from './auth'
 
+const MEAL_TYPES = new Set([
+  'Breakfast',
+  'Lunch',
+  'Dinner',
+  'Appetizer/Starter',
+  'Soup',
+  'Salad',
+  'Side Dish',
+  'Main Course',
+  'Dessert',
+  'Beverage'
+])
+
+const CUISINES = new Set([
+  'Italian',
+  'Chinese',
+  'Thai',
+  'Indian',
+  'French',
+  'Japanese',
+  'Mexican',
+  'American',
+  'Greek',
+  'Mediterranean',
+  'Spanish',
+  'Korean',
+  'Vietnamese',
+  'Middle Eastern'
+])
+
+const UNITS = new Set([
+  'g',
+  'kg',
+  'oz',
+  'lb',
+  'mL',
+  'L',
+  'tsp',
+  'tbsp',
+  'cup',
+  'pt',
+  'qt',
+  'gal',
+  'each',
+  'bunch',
+  'slice',
+  'clove',
+  'pinch'
+])
+
+function normalizeLookupText(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function levenshteinDistance(a, b) {
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const dp = Array.from({ length: rows }, () => Array(cols).fill(0))
+
+  for (let i = 0; i < rows; i += 1) dp[i][0] = i
+  for (let j = 0; j < cols; j += 1) dp[0][j] = j
+
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      )
+    }
+  }
+
+  return dp[a.length][b.length]
+}
+
 export const useRecipesStore = defineStore('recipes', () => {
   const feedRecipes = ref([])
   const searchResults = ref([])
@@ -167,6 +245,210 @@ export const useRecipesStore = defineStore('recipes', () => {
     return ratingRow?.rating ?? null
   }
 
+  function normalizeIngredientName(name) {
+    return name
+      .trim()
+      .replace(/\s+/g, ' ')
+      .split(' ')
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(' ')
+  }
+
+  async function fetchIngredientDirectory() {
+    const { data, error: fetchError } = await supabase
+      .from('ingredients')
+      .select('ingredient_id, name, category, calories')
+      .order('name')
+      .limit(500)
+
+    if (fetchError) throw fetchError
+    return data ?? []
+  }
+
+  async function searchIngredientSuggestions(query) {
+    const trimmed = query?.trim()
+    if (!trimmed || trimmed.length < 2) return []
+
+    const { data, error: searchError } = await supabase
+      .from('ingredients')
+      .select('ingredient_id, name, category, calories')
+      .ilike('name', `%${trimmed}%`)
+      .order('name')
+      .limit(8)
+
+    if (searchError) throw searchError
+    if (data?.length) return data
+
+    const lookup = normalizeLookupText(trimmed)
+    const directory = await fetchIngredientDirectory()
+
+    return directory
+      .map(item => {
+        const normalized = normalizeLookupText(item.name)
+        const distance = levenshteinDistance(lookup, normalized)
+        const startsClose = normalized.startsWith(lookup.slice(0, Math.max(1, lookup.length - 1)))
+        return { ...item, distance, startsClose }
+      })
+      .filter(item => item.distance <= 2 || item.startsClose)
+      .sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name))
+      .slice(0, 8)
+      .map(({ distance, startsClose, ...item }) => item)
+  }
+
+  async function resolveIngredientMatch(name) {
+    const normalizedName = normalizeIngredientName(name)
+
+    const { data: exact, error: exactError } = await supabase
+      .from('ingredients')
+      .select('ingredient_id, name, category, calories')
+      .ilike('name', normalizedName)
+      .limit(1)
+
+    if (exactError) throw exactError
+    if (exact?.[0]) return { ingredient: exact[0], inferred: exact[0].name !== normalizedName }
+
+    const directory = await fetchIngredientDirectory()
+    const lookup = normalizeLookupText(normalizedName)
+
+    let bestMatch = null
+    for (const item of directory) {
+      const candidate = normalizeLookupText(item.name)
+      const distance = levenshteinDistance(lookup, candidate)
+
+      // Only auto-correct typos: the normalized strings must differ by at most 1 character
+      // (a single insertion, deletion, or substitution). This prevents "Garlic Paste" → "Garlic".
+      if (distance > 1) continue
+
+      if (!bestMatch || distance < bestMatch.distance) {
+        bestMatch = { ingredient: item, distance }
+      }
+    }
+
+    if (!bestMatch) return { ingredient: null, inferred: false }
+    return { ingredient: bestMatch.ingredient, inferred: true }
+  }
+
+  async function ensureIngredient(name) {
+    const normalized = normalizeIngredientName(name)
+    const { ingredient: existing } = await resolveIngredientMatch(normalized)
+    if (existing) return existing
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('ingredients')
+      .insert({ name: normalized })
+      .select('ingredient_id, name')
+      .single()
+
+    if (insertError) throw insertError
+    return inserted
+  }
+
+  async function uploadRecipeThumbnail(recipeId, file) {
+    const fileExt = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
+    const contentType = file.type || `image/${fileExt}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('thumbnails')
+      .upload(`${recipeId}/thumbnail`, file, {
+        upsert: true,
+        contentType
+      })
+
+    if (uploadError) throw uploadError
+  }
+
+  async function createRecipe(payload) {
+    const auth = useAuthStore()
+    if (!auth.user) throw new Error('You must be logged in to create a recipe.')
+    if (!MEAL_TYPES.has(payload.meal_type)) throw new Error('Invalid meal type.')
+    if (payload.cuisine && !CUISINES.has(payload.cuisine)) throw new Error('Invalid cuisine.')
+    if (payload.ingredients.some(item => item.unit && !UNITS.has(item.unit))) {
+      throw new Error('Invalid ingredient unit.')
+    }
+
+    loading.value = true
+    error.value = null
+
+    try {
+      const recipeInsert = {
+        title: payload.title.trim(),
+        description: payload.description?.trim() || null,
+        meal_type: payload.meal_type || null,
+        cuisine: payload.cuisine?.trim() || null,
+        cook_time_minutes: payload.cook_time_minutes || null,
+        prep_time_minutes: payload.prep_time_minutes || null,
+        difficulty: payload.difficulty || null,
+        servings: payload.servings || null,
+        instructions: {
+          instructions: payload.instructions.map((step, index) => ({
+            step: index + 1,
+            instruction: step.instruction.trim(),
+            ingredients: step.ingredients?.length
+              ? step.ingredients.map(name => ({ name: normalizeIngredientName(name) }))
+              : undefined
+          }))
+        }
+      }
+
+      const { data: recipe, error: recipeError } = await supabase
+        .from('recipes')
+        .insert(recipeInsert)
+        .select('recipe_id')
+        .single()
+
+      if (recipeError) throw recipeError
+
+      const unresolvedIngredientNames = payload.ingredients
+        .filter(item => !item.ingredient_id)
+        .map(item => item.name)
+
+      const uniqueNames = [...new Set([
+        ...unresolvedIngredientNames,
+        ...payload.instructions.flatMap(step => step.ingredients ?? [])
+      ]
+        .filter(Boolean)
+        .map(normalizeIngredientName)
+      )]
+
+      const ingredientRows = await Promise.all(uniqueNames.map(ensureIngredient))
+      const ingredientMap = new Map(ingredientRows.map(item => [item.name, item.ingredient_id]))
+
+      const recipeIngredients = payload.ingredients.map(item => ({
+        recipe_id: recipe.recipe_id,
+        ingredient_id: item.ingredient_id ?? ingredientMap.get(normalizeIngredientName(item.name)),
+        quantity: item.quantity === '' || item.quantity == null ? null : Number(item.quantity),
+        unit: item.unit?.trim() || null
+      }))
+
+      const { error: joinError } = await supabase
+        .from('recipe_ingredient')
+        .insert(recipeIngredients)
+
+      if (joinError) throw joinError
+
+      const { error: ownerError } = await supabase
+        .from('recipe_user')
+        .insert({
+          user_id: auth.user.id,
+          recipe_id: recipe.recipe_id,
+          created_or_saved: 'C'
+        })
+
+      if (ownerError) throw ownerError
+
+      if (payload.thumbnail) {
+        await uploadRecipeThumbnail(recipe.recipe_id, payload.thumbnail)
+      }
+
+      return recipe.recipe_id
+    } catch (err) {
+      error.value = err.message
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     feedRecipes,
     searchResults,
@@ -177,6 +459,10 @@ export const useRecipesStore = defineStore('recipes', () => {
     searchRecipes,
     fetchRecipeById,
     rateRecipe,
-    getUserRating
+    getUserRating,
+    createRecipe,
+    searchIngredientSuggestions,
+    resolveIngredientMatch,
+    ensureIngredient
   }
 })

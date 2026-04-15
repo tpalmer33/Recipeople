@@ -107,7 +107,7 @@ import { ref, computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import StarRating from './StarRating.vue'
 import { useFavoritesStore } from '@/stores/favorites'
-import { recipeImages } from '@/lib/recipeImages'
+import { getRecipeImageUrl } from '@/lib/recipeImages'
 
 const props = defineProps({
   recipe: { type: Object, required: true },
@@ -118,7 +118,7 @@ const favStore = useFavoritesStore()
 const favoriteLoading = ref(false)
 const imageError = ref(false)
 const isFav = computed(() => favStore.isFavorite(props.recipe.recipe_id))
-const imageUrl = computed(() => recipeImages[props.recipe.recipe_id] ?? null)
+const imageUrl = computed(() => getRecipeImageUrl(props.recipe.recipe_id))
 
 const mealTypeIcons = {
   breakfast: '🥞', lunch: '🥗', dinner: '🍝',

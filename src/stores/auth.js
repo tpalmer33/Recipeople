@@ -103,7 +103,12 @@ export const useAuthStore = defineStore('auth', () => {
     const { error: uploadError } = await supabase.storage
       .from('avatars')
       .upload(path, file, { upsert: true })
-    if (uploadError) throw uploadError
+    if (uploadError) {
+      // Log the error to the terminal
+      // eslint-disable-next-line no-console
+      console.error('Avatar upload error:', uploadError)
+      throw uploadError
+    }
 
     const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path)
     await updateProfile({ avatar: urlData.publicUrl })
