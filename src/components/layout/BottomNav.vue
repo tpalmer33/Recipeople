@@ -93,11 +93,25 @@ const IconCreate = defineComponent({
   }
 })
 
+const IconMine = defineComponent({
+  props: { active: Boolean },
+  setup(props) {
+    return () => props.active
+      ? h('svg', { fill: 'currentColor', viewBox: '0 0 24 24' }, [
+          h('path', { 'fill-rule': 'evenodd', 'clip-rule': 'evenodd', d: 'M18.685 19.097A9.723 9.723 0 0021.75 12c0-5.385-4.365-9.75-9.75-9.75S2.25 6.615 2.25 12a9.723 9.723 0 003.065 7.097A9.716 9.716 0 0012 21.75a9.716 9.716 0 006.685-2.653zm-12.54-1.285A7.486 7.486 0 0112 15a7.486 7.486 0 015.855 2.812A8.224 8.224 0 0112 20.25a8.224 8.224 0 01-5.855-2.438zM15.75 9a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z' })
+        ])
+      : h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
+          h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z' })
+        ])
+  }
+})
+
 const navItems = [
-  { to: '/feed',      icon: IconHome,     label: 'Feed'      },
-  { to: '/search',    icon: IconSearch,   label: 'Search'    },
-  { to: '/create',    icon: IconCreate,   label: 'Create'    },
-  { to: '/pantry',    icon: IconPantry,   label: 'Pantry'    },
-  { to: '/favorites', icon: IconHeart,    label: 'Favorites' },
+  { to: '/feed',        icon: IconHome,    label: 'Feed'      },
+  { to: '/search',      icon: IconSearch,  label: 'Search'    },
+  { to: '/create',      icon: IconCreate,  label: 'Create'    },
+  { to: '/pantry',      icon: IconPantry,  label: 'Pantry'    },
+  { to: '/my-recipes',  icon: IconMine,    label: 'Mine'      },
+  { to: '/favorites',   icon: IconHeart,   label: 'Favorites' },
 ]
 </script>

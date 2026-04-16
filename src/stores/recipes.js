@@ -3,6 +3,62 @@ import { ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from './auth'
 
+// USDA FoodData Central food-category → app ingredient category
+const USDA_CATEGORY_MAP = {
+  'Vegetables and Vegetable Products': 'Produce',
+  'Fruits and Fruit Juices':           'Produce',
+  'Poultry Products':                  'Protein',
+  'Beef Products':                     'Protein',
+  'Pork Products':                     'Protein',
+  'Lamb, Veal, and Game Products':     'Protein',
+  'Finfish and Shellfish Products':    'Protein',
+  'Legumes and Legume Products':       'Protein',
+  'Nut and Seed Products':             'Protein',
+  'Dairy and Egg Products':            'Dairy',
+  'Cereal Grains and Pasta':           'Grains',
+  'Baked Products':                    'Grains',
+  'Breakfast Cereals':                 'Grains',
+  'Fats and Oils':                     'Pantry',
+  'Beverages':                         'Pantry',
+  'Sweets':                            'Pantry',
+  'Soups, Sauces, and Gravies':        'Pantry',
+  'Snacks':                            'Pantry',
+  'Spices and Herbs':                  'Spices',
+}
+
+// Fetch category + kcal/100 g from USDA FoodData Central.
+// Always resolves — returns nulls on any failure so the insert still succeeds.
+async function fetchIngredientNutrition(name) {
+  try {
+    const apiKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_USDA_API_KEY) || 'DEMO_KEY'
+    const url =
+      `https://api.nal.usda.gov/fdc/v1/foods/search` +
+      `?query=${encodeURIComponent(name)}` +
+      `&api_key=${encodeURIComponent(apiKey)}` +
+      `&pageSize=1` +
+      `&dataType=Foundation,SR%20Legacy`
+
+    const res = await fetch(url)
+    if (!res.ok) return { category: null, calories: null }
+
+    const data = await res.json()
+    const food = data.foods?.[0]
+    if (!food) return { category: null, calories: null }
+
+    const category = USDA_CATEGORY_MAP[food.foodCategory] ?? null
+
+    // USDA nutrient ID 1008 = Energy (kcal per 100 g)
+    const energyEntry = food.foodNutrients?.find(
+      n => n.nutrientId === 1008 || n.nutrientName === 'Energy'
+    )
+    const calories = energyEntry?.value != null ? Math.round(energyEntry.value) : null
+
+    return { category, calories }
+  } catch {
+    return { category: null, calories: null }
+  }
+}
+
 const MEAL_TYPES = new Set([
   'Breakfast',
   'Lunch',
@@ -99,7 +155,7 @@ export const useRecipesStore = defineStore('recipes', () => {
         .from('recipes')
         .select(`
           recipe_id, title, description, meal_type, cuisine,
-          cook_time_minutes, prep_time_minutes, difficulty, servings,
+          cook_time_minutes, prep_time_minutes, difficulty, servings, thumbnail,
           recipe_ingredient (ingredient_id),
           recipe_rating (rating)
         `)
@@ -148,7 +204,7 @@ export const useRecipesStore = defineStore('recipes', () => {
         .from('recipes')
         .select(`
           recipe_id, title, description, meal_type, cuisine,
-          cook_time_minutes, prep_time_minutes, difficulty, servings,
+          cook_time_minutes, prep_time_minutes, difficulty, servings, thumbnail,
           recipe_rating (rating)
         `)
 
@@ -333,10 +389,16 @@ export const useRecipesStore = defineStore('recipes', () => {
     const { ingredient: existing } = await resolveIngredientMatch(normalized)
     if (existing) return existing
 
+    const { category, calories } = await fetchIngredientNutrition(normalized)
+
+    const row = { name: normalized }
+    if (category  != null) row.category = category
+    if (calories  != null) row.calories = calories
+
     const { data: inserted, error: insertError } = await supabase
       .from('ingredients')
-      .insert({ name: normalized })
-      .select('ingredient_id, name')
+      .insert(row)
+      .select('ingredient_id, name, category, calories')
       .single()
 
     if (insertError) throw insertError
@@ -344,17 +406,21 @@ export const useRecipesStore = defineStore('recipes', () => {
   }
 
   async function uploadRecipeThumbnail(recipeId, file) {
-    const fileExt = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
-    const contentType = file.type || `image/${fileExt}`
+    const ext = file.name.split('.').pop()
+    const path = `thumbnails/${recipeId}.${ext}`
 
     const { error: uploadError } = await supabase.storage
       .from('thumbnails')
-      .upload(`${recipeId}/thumbnail`, file, {
-        upsert: true,
-        contentType
-      })
+      .upload(path, file, { upsert: true })
 
-    if (uploadError) throw uploadError
+    if (uploadError) {
+      // eslint-disable-next-line no-console
+      console.error('Thumbnail upload error:', uploadError)
+      throw uploadError
+    }
+
+    const { data: urlData } = supabase.storage.from('thumbnails').getPublicUrl(path)
+    return urlData.publicUrl
   }
 
   async function createRecipe(payload) {
@@ -413,6 +479,18 @@ export const useRecipesStore = defineStore('recipes', () => {
       const ingredientRows = await Promise.all(uniqueNames.map(ensureIngredient))
       const ingredientMap = new Map(ingredientRows.map(item => [item.name, item.ingredient_id]))
 
+      // Insert recipe_user FIRST so the RLS policy on recipe_ingredient
+      // can find the ownership row when it runs its sub-select.
+      const { error: ownerError } = await supabase
+        .from('recipe_user')
+        .insert({
+          user_id: auth.user.id,
+          recipe_id: recipe.recipe_id,
+          created_or_saved: 'C'
+        })
+
+      if (ownerError) throw ownerError
+
       const recipeIngredients = payload.ingredients.map(item => ({
         recipe_id: recipe.recipe_id,
         ingredient_id: item.ingredient_id ?? ingredientMap.get(normalizeIngredientName(item.name)),
@@ -426,21 +504,116 @@ export const useRecipesStore = defineStore('recipes', () => {
 
       if (joinError) throw joinError
 
-      const { error: ownerError } = await supabase
-        .from('recipe_user')
-        .insert({
-          user_id: auth.user.id,
-          recipe_id: recipe.recipe_id,
-          created_or_saved: 'C'
-        })
-
-      if (ownerError) throw ownerError
-
       if (payload.thumbnail) {
-        await uploadRecipeThumbnail(recipe.recipe_id, payload.thumbnail)
+        const thumbnailUrl = await uploadRecipeThumbnail(recipe.recipe_id, payload.thumbnail)
+        const { error: thumbUpdateError } = await supabase
+          .from('recipes')
+          .upsert({ recipe_id: recipe.recipe_id, thumbnail: thumbnailUrl })
+        if (thumbUpdateError) throw thumbUpdateError
       }
 
       return recipe.recipe_id
+    } catch (err) {
+      error.value = err.message
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const userRecipes = ref([])
+
+  async function fetchUserRecipes() {
+    const auth = useAuthStore()
+    if (!auth.user) return
+
+    loading.value = true
+    error.value = null
+
+    try {
+      const { data, error: err } = await supabase
+        .from('recipe_user')
+        .select(`
+          recipes (
+            recipe_id, title, description, meal_type, cuisine,
+            cook_time_minutes, prep_time_minutes, difficulty, servings, thumbnail,
+            recipe_rating (rating)
+          )
+        `)
+        .eq('user_id', auth.user.id)
+        .eq('created_or_saved', 'C')
+
+      if (err) throw err
+
+      userRecipes.value = (data ?? [])
+        .map(row => row.recipes)
+        .filter(Boolean)
+        .map(recipe => {
+          const avgRating = recipe.recipe_rating?.length > 0
+            ? recipe.recipe_rating.reduce((sum, r) => sum + r.rating, 0) / recipe.recipe_rating.length
+            : null
+          return {
+            ...recipe,
+            recipe_rating: undefined,
+            avgRating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+            ratingCount: recipe.recipe_rating?.length ?? 0
+          }
+        })
+    } catch (err) {
+      error.value = err.message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function updateRecipe(recipeId, payload) {
+    loading.value = true
+    error.value = null
+
+    try {
+      const updateData = {
+        title: payload.title?.trim(),
+        description: payload.description?.trim() || null,
+        meal_type: payload.meal_type || null,
+        cuisine: payload.cuisine?.trim() || null,
+        cook_time_minutes: payload.cook_time_minutes || null,
+        prep_time_minutes: payload.prep_time_minutes || null,
+        difficulty: payload.difficulty || null,
+        servings: payload.servings || null
+      }
+
+      if (payload.thumbnailFile) {
+        const thumbnailUrl = await uploadRecipeThumbnail(recipeId, payload.thumbnailFile)
+        updateData.thumbnail = thumbnailUrl
+      }
+
+      const { error: updateError } = await supabase
+        .from('recipes')
+        .update(updateData)
+        .eq('recipe_id', recipeId)
+
+      if (updateError) throw updateError
+    } catch (err) {
+      error.value = err.message
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function deleteRecipe(recipeId) {
+    loading.value = true
+    error.value = null
+
+    try {
+      const { error: deleteError } = await supabase
+        .from('recipes')
+        .delete()
+        .eq('recipe_id', recipeId)
+
+      if (deleteError) throw deleteError
+
+      userRecipes.value = userRecipes.value.filter(r => r.recipe_id !== recipeId)
     } catch (err) {
       error.value = err.message
       throw err
@@ -453,6 +626,7 @@ export const useRecipesStore = defineStore('recipes', () => {
     feedRecipes,
     searchResults,
     currentRecipe,
+    userRecipes,
     loading,
     error,
     fetchFeedRecipes,
@@ -461,6 +635,9 @@ export const useRecipesStore = defineStore('recipes', () => {
     rateRecipe,
     getUserRating,
     createRecipe,
+    fetchUserRecipes,
+    updateRecipe,
+    deleteRecipe,
     searchIngredientSuggestions,
     resolveIngredientMatch,
     ensureIngredient

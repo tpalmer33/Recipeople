@@ -118,7 +118,7 @@ const favStore = useFavoritesStore()
 const favoriteLoading = ref(false)
 const imageError = ref(false)
 const isFav = computed(() => favStore.isFavorite(props.recipe.recipe_id))
-const imageUrl = computed(() => getRecipeImageUrl(props.recipe.recipe_id))
+const imageUrl = computed(() => getRecipeImageUrl(props.recipe))
 
 const mealTypeIcons = {
   breakfast: '🥞', lunch: '🥗', dinner: '🍝',

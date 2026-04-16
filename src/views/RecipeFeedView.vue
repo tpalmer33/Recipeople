@@ -5,7 +5,9 @@
       <h1 class="text-2xl font-bold text-gray-900">
         Hey, {{ auth.profile?.fname ?? 'Chef' }}
       </h1>
-      <p class="text-gray-500 text-sm mt-0.5">Here's what you can make with your pantry</p>
+      <p class="text-gray-500 text-sm mt-0.5">
+        {{ pantry.pantryItems.length > 0 ? 'Here\'s what you can make with your pantry' : 'Browse recipes and add pantry items to get personalized matches' }}
+      </p>
     </div>
 
     <!-- Pantry summary chip -->
@@ -25,20 +27,13 @@
       </svg>
     </RouterLink>
 
-    <!-- Empty pantry state -->
-    <div v-if="!pantry.loading && pantry.pantryItems.length === 0" class="text-center py-12">
-      <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
-        <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
-        </svg>
-      </div>
-      <h3 class="font-bold text-gray-700 text-lg">Your pantry is empty</h3>
-      <p class="text-gray-400 text-sm mt-1 mb-4">Add ingredients to get personalized recipe recommendations</p>
-      <RouterLink to="/pantry" class="btn-primary inline-flex">Add Ingredients</RouterLink>
+    <!-- Empty pantry nudge (non-blocking) -->
+    <div v-if="!pantry.loading && pantry.pantryItems.length === 0" class="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 mb-5 text-sm text-amber-800">
+      Add ingredients to your pantry and we’ll sort recipes by how many you already have.
     </div>
 
     <!-- Loading skeleton -->
-    <div v-else-if="recipes.loading" class="space-y-4">
+    <div v-if="recipes.loading" class="space-y-4">
       <div v-for="i in 3" :key="i" class="card animate-pulse">
         <div class="h-36 bg-gray-200 rounded-t-2xl" />
         <div class="p-4 space-y-2">
@@ -61,15 +56,15 @@
     </div>
 
     <!-- No recipes found -->
-    <div v-else-if="!recipes.loading && recipes.feedRecipes.length === 0" class="text-center py-12">
+    <div v-else-if="recipes.feedRecipes.length === 0" class="text-center py-12">
       <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
         <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
         </svg>
       </div>
-      <h3 class="font-bold text-gray-700 text-lg">No recipes found</h3>
-      <p class="text-gray-400 text-sm mt-1 mb-4">We couldn't find any recipes matching your pantry yet.</p>
-      <RouterLink to="/search" class="btn-primary inline-flex">Browse All Recipes</RouterLink>
+      <h3 class="font-bold text-gray-700 text-lg">No recipes yet</h3>
+      <p class="text-gray-400 text-sm mt-1 mb-4">Be the first to create one!</p>
+      <RouterLink to="/create" class="btn-primary inline-flex">Create a Recipe</RouterLink>
     </div>
 
     <!-- Recipe list -->

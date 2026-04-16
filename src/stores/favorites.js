@@ -21,7 +21,7 @@ export const useFavoritesStore = defineStore('favorites', () => {
         recipe_id, created_at,
         recipes (
           recipe_id, title, description, meal_type, cuisine,
-          cook_time_minutes, prep_time_minutes, difficulty, servings,
+          cook_time_minutes, prep_time_minutes, difficulty, servings, thumbnail,
           recipe_rating (rating)
         )
       `)

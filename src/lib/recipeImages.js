@@ -1,5 +1,3 @@
-import { supabase } from '@/lib/supabase'
-
 // Seeded photos for demo recipes.
 export const recipeImages = {
   '30000000-0000-0000-0000-000000000001': 'https://leitesculinaria.com/wp-content/uploads/2024/04/spaghetti-carbonara-1-2.jpg',
@@ -16,10 +14,9 @@ export const recipeImages = {
   '30000000-0000-0000-0000-000000000012': 'https://savorthebest.com/wp-content/uploads/2024/04/garlic-butter-rice-5.jpg'
 }
 
-export function getRecipeImageUrl(recipeId) {
-  if (!recipeId) return null
-  if (recipeImages[recipeId]) return recipeImages[recipeId]
-
-  const { data } = supabase.storage.from('recipe-thumbnails').getPublicUrl(`${recipeId}/thumbnail`)
-  return data.publicUrl
+// Priority: 1) hard-coded demo image  2) thumbnail column from DB  3) null (shows gradient fallback)
+export function getRecipeImageUrl(recipe) {
+  if (!recipe) return null
+  if (recipeImages[recipe.recipe_id]) return recipeImages[recipe.recipe_id]
+  return recipe.thumbnail ?? null
 }
